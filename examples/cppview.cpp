@@ -43,6 +43,13 @@
 #include <GL/glu.h>
 #endif
 
+#include <iostream>
+#include <fstream>
+
+#include "/gris/gris-f/homestud/skoch/goesele-proj/mve/libs/math/matrix.h"
+#include "/gris/gris-f/homestud/skoch/goesele-proj/mve/libs/math/vector.h"
+#include "/gris/gris-f/homestud/skoch/goesele-proj/mve/libs/math/matrixtools.h"
+
 
 class Mutex {
 public:
@@ -63,7 +70,7 @@ private:
 class MyFreenectDevice : public Freenect::FreenectDevice {
 public:
 	MyFreenectDevice(freenect_context *_ctx, int _index)
-		: Freenect::FreenectDevice(_ctx, _index), m_buffer_depth(FREENECT_VIDEO_RGB_SIZE),m_buffer_video(FREENECT_VIDEO_RGB_SIZE), m_gamma(2048), m_new_rgb_frame(false), m_new_depth_frame(false)
+	  : Freenect::FreenectDevice(_ctx, _index), m_buffer_depth(FREENECT_VIDEO_RGB_SIZE),m_buffer_realdepth(FREENECT_FRAME_PIX), m_buffer_video(FREENECT_VIDEO_RGB_SIZE), m_gamma(2048), m_new_rgb_frame(false), m_new_depth_frame(false)
 	{
 		for( unsigned int i = 0 ; i < 2048 ; i++) {
 			float v = i/2048.0;
@@ -73,7 +80,7 @@ public:
 	}
 	// Do not call directly even in child
 	void VideoCallback(void* _rgb, uint32_t timestamp) {
-		std::cout << "RGB callback" << std::endl;
+	  //	std::cout << "RGB callback" << std::endl;
 		m_rgb_mutex.lock();
 		uint8_t* rgb = static_cast<uint8_t*>(_rgb);
 		std::copy(rgb, rgb+FREENECT_VIDEO_RGB_SIZE, m_buffer_video.begin());
@@ -82,10 +89,11 @@ public:
 	};
 	// Do not call directly even in child
 	void DepthCallback(void* _depth, uint32_t timestamp) {
-		std::cout << "Depth callback" << std::endl;
+	  //	std::cout << "Depth callback" << std::endl;
 		m_depth_mutex.lock();
 		uint16_t* depth = static_cast<uint16_t*>(_depth);
 		for( unsigned int i = 0 ; i < FREENECT_FRAME_PIX ; i++) {
+		  m_buffer_realdepth[i] = depth[i];
 			int pval = m_gamma[depth[i]];
 			int lb = pval & 0xff;
 			switch (pval>>8) {
@@ -142,10 +150,14 @@ public:
 		}
 	}
 
-	bool getDepth(std::vector<uint8_t> &buffer) {
+
+
+
+  bool getDepth(std::vector<uint8_t> &buffer, std::vector<uint16_t> &r_buffer ) {
 		m_depth_mutex.lock();
 		if(m_new_depth_frame) {
 			buffer.swap(m_buffer_depth);
+			r_buffer.swap(m_buffer_realdepth);
 			m_new_depth_frame = false;
 			m_depth_mutex.unlock();
 			return true;
@@ -157,6 +169,7 @@ public:
 
 private:
 	std::vector<uint8_t> m_buffer_depth;
+	std::vector<uint16_t> m_buffer_realdepth;
 	std::vector<uint8_t> m_buffer_video;
 	std::vector<uint16_t> m_gamma;
 	Mutex m_rgb_mutex;
@@ -176,14 +189,133 @@ double freenect_angle(0);
 int got_frames(0),window(0);
 int g_argc;
 char **g_argv;
+bool save;
 
 void DrawGLScene()
 {
 	static std::vector<uint8_t> depth(640*480*4);
+	static std::vector<uint16_t> r_depth(FREENECT_FRAME_PIX);
 	static std::vector<uint8_t> rgb(640*480*4);
 
-	device->getDepth(depth);
+	device->getDepth(depth, r_depth);
 	device->getRGB(rgb);
+
+
+
+	if (save){
+	  save = !save;
+	  // write ply file 
+	     std::ofstream plyfile("out.ply");
+
+	     float f = 590.0f;
+	     float a = -0.0030711f;
+	     float b = 3.3309495f;
+	     float cx = 340.0f;
+	     float cy = 240.0f;
+
+
+
+	     float matf[16] = {
+		1/f,     0,  0, 0,
+		0,    -1/f,  0, 0,
+		0,       0,  0, a,
+		-cx/f,cy/f, -1, b
+		  };
+	     math::Matrix4f mat(matf);
+
+	     float matc[16] = {
+	  5.34866271e+02,   3.89654806e+00,   0.00000000e+00,   1.74704200e-02,
+		 -4.70724694e+00,  -5.28843603e+02,   0.00000000e+00,  -1.22753400e-02,
+		 -3.19670762e+02,  -2.60999685e+02,   0.00000000e+00,  -9.99772000e-01,
+		 -6.98445586e+00,   3.31139785e+00,   0.00000000e+00,   1.09167360e-02
+		  };
+	     math::Matrix4f mat_col(matf);
+	     
+
+	     //	     std::cerr << mat << std::endl;
+
+	     // write ply header
+	     plyfile << "ply" << std::endl;
+	     plyfile << "format ascii 1.0" << std::endl;
+	     plyfile << "element vertex " << (640*480) << std::endl;
+	     plyfile << "property float x" << std::endl;
+	     plyfile << "property float y" << std::endl;
+	     plyfile << "property float z" << std::endl;
+	     plyfile << "property uchar diffuse_red" << std::endl;
+	     plyfile << "property uchar diffuse_green" << std::endl;
+	     plyfile << "property uchar diffuse_blue" << std::endl;
+	     plyfile << "end_header" << std::endl;
+
+	     mat.transpose();
+
+	     unsigned char col[480][640][3];
+	     
+	     for (unsigned int i = 0; i < 480; ++i){
+	       for (unsigned int j = 0; j < 640; ++j){
+		 col[i][j][0] = 127;
+		 col[i][j][1] = 127;
+		 col[i][j][2] = 127;
+	       }
+	     }
+	     for (unsigned int i = 0; i < 480; ++i){
+	       for (unsigned int j = 0; j < 640; ++j){
+	       math::Vec4f col_pos;
+	       
+	       col_pos[0] = j;
+	       col_pos[1] = i;
+	       col_pos[2] = 0;
+	       col_pos[3] = 1.0;
+	       
+	       mat_col.mult(col_pos);
+
+	       col_pos /= col_pos[3];
+
+
+	       //   std::cerr << col_pos[1] << " " << col_pos[0] << std::endl;
+
+
+	       if (col_pos[1] < 0 || col_pos[1] >= 480){
+		 continue;
+	       }
+	       
+	       if (col_pos[0] < 0 || col_pos[0] >= 640){
+		 continue;
+	       }
+
+	       col[(int) col_pos[1]][(int) col_pos[0]][0] = rgb[(i*640+j)*3+0];
+	       col[(int) col_pos[1]][(int) col_pos[0]][1] = rgb[(i*640+j)*3+1];
+	       col[(int) col_pos[1]][(int) col_pos[0]][2] = rgb[(i*640+j)*3+2];
+	       
+	       }
+	     }
+	     	     
+	     for (unsigned int i = 0; i < 480; ++i){
+	       for (unsigned int j = 0; j < 640; ++j){
+	       math::Vec4f pt;
+	       //	       std::cerr << r_depth[i*640+j]   << std::endl;
+	       pt[0] = j;
+	       pt[1] = i;
+	       pt[2] = r_depth[i*640+j];
+	       pt[3] = 1;
+
+	       //   std::cerr << pt << std::endl;
+
+
+
+	       math::Vec4f ptout = mat.mult(pt);
+	       
+	       ptout /= ptout[3];
+
+	       //   std::cerr <<ptout << std::endl;
+	       
+	       
+	       plyfile << ptout[0] << " " << ptout[1] << " " << ptout[2] <<  
+		 " "<< (int) col[i][j][0] << " "<< (int) col[i][j][1] << " " << (int) col[i][j][2] << std::endl;
+
+	       //    plyfile << ptout[0] << " " << ptout[1] << " " << ptout[2] << " 255 255 255" << std::endl;
+	       }
+	     }
+	}
 
 	got_frames = 0;
 
@@ -215,6 +347,8 @@ void DrawGLScene()
 	glEnd();
 
 	glutSwapBuffers();
+
+
 }
 
 void keyPressed(unsigned char key, int x, int y)
@@ -263,6 +397,15 @@ void keyPressed(unsigned char key, int x, int y)
 		device->setLed(LED_OFF);
 	}
 	device->setTiltDegrees(freenect_angle);
+
+	if (key == ' '){
+	  save = true;
+	  
+	}
+
+	   
+
+
 }
 
 void ReSizeGLScene(int Width, int Height)
@@ -292,6 +435,8 @@ void InitGL(int Width, int Height)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	ReSizeGLScene(Width, Height);
+
+	save = false;
 }
 
 void *gl_threadfunc(void *arg)
