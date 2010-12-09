@@ -176,6 +176,7 @@ private:
 	Mutex m_depth_mutex;
 	bool m_new_rgb_frame;
 	bool m_new_depth_frame;
+        
 };
 
 Freenect::Freenect<MyFreenectDevice> freenect;
@@ -191,6 +192,15 @@ int g_argc;
 char **g_argv;
 bool save;
 
+int capture_frame_num;
+int capture_frame_jump;
+int capture_frame_cur;
+int count_frames;
+
+std::vector<uint16_t> capture_depth; // buffer for depth images
+std::vector<uint8_t> capture_color; // buffer for color images
+
+
 void DrawGLScene()
 {
 	static std::vector<uint8_t> depth(640*480*4);
@@ -202,10 +212,28 @@ void DrawGLScene()
 
 
 
-	if (save){
-	  save = !save;
-	  // write ply file 
-	     std::ofstream plyfile("out.ply");
+
+	if (capture_frame_cur < capture_frame_num && count_frames%capture_frame_jump == 0){
+	  std::cerr << "Capturing: frame " << capture_frame_cur << std::endl;
+	  // save depth and color to buffer
+	  capture_color.insert(capture_color.end(), rgb.begin(), rgb.end());
+	  capture_depth.insert(capture_depth.end(), r_depth.begin(), r_depth.end());
+	  
+	  //	  std::cerr << "Capturing: frame " << capture_frame_cur << " done " << std::endl;
+	  capture_frame_cur++;
+	}
+
+	if (capture_frame_cur < capture_frame_num){
+	  ++count_frames;
+	}
+
+	if (capture_frame_cur == capture_frame_num && capture_depth.size() > 0){
+	  
+	  std::cerr << "Capturing: writing buffer to file " << std::endl;
+	  std::cerr << capture_depth.size() << std::endl;
+	  std::cerr << capture_color.size() << std::endl;
+
+	  // write buffer to indiviual ply files 
 
 	     float f = 590.0f;
 	     float a = -0.0030711f;
@@ -213,7 +241,7 @@ void DrawGLScene()
 	     float cx = 340.0f;
 	     float cy = 240.0f;
 
-
+	 
 
 	     float matf[16] = {
 		1/f,     0,  0, 0,
@@ -222,99 +250,117 @@ void DrawGLScene()
 		-cx/f,cy/f, -1, b
 		  };
 	     math::Matrix4f mat(matf);
-
-	     float matc[16] = {
-	  5.34866271e+02,   3.89654806e+00,   0.00000000e+00,   1.74704200e-02,
-		 -4.70724694e+00,  -5.28843603e+02,   0.00000000e+00,  -1.22753400e-02,
-		 -3.19670762e+02,  -2.60999685e+02,   0.00000000e+00,  -9.99772000e-01,
-		 -6.98445586e+00,   3.31139785e+00,   0.00000000e+00,   1.09167360e-02
-		  };
-	     math::Matrix4f mat_col(matf);
-	     
-
-	     //	     std::cerr << mat << std::endl;
-
-	     // write ply header
-	     plyfile << "ply" << std::endl;
-	     plyfile << "format ascii 1.0" << std::endl;
-	     plyfile << "element vertex " << (640*480) << std::endl;
-	     plyfile << "property float x" << std::endl;
-	     plyfile << "property float y" << std::endl;
-	     plyfile << "property float z" << std::endl;
-	     plyfile << "property uchar diffuse_red" << std::endl;
-	     plyfile << "property uchar diffuse_green" << std::endl;
-	     plyfile << "property uchar diffuse_blue" << std::endl;
-	     plyfile << "end_header" << std::endl;
-
 	     mat.transpose();
 
+	     float matc[16] = {
+	       5.34866271e+02,   3.89654806e+00,   0.00000000e+00,   1.74704200e-02,
+	       -4.70724694e+00,  -5.28843603e+02,   0.00000000e+00,  -1.22753400e-02,
+	       -3.19670762e+02,  -2.60999685e+02,   0.00000000e+00,  -9.99772000e-01,
+	       -6.98445586e+00,   3.31139785e+00,   0.00000000e+00,   1.09167360e-02
+	     };
+	     math::Matrix4f mat_col(matf);
+	     
 	     unsigned char col[480][640][3];
+	     math::Vec4f col_pos[480][640];	       
 	     
 	     for (unsigned int i = 0; i < 480; ++i){
 	       for (unsigned int j = 0; j < 640; ++j){
-		 col[i][j][0] = 127;
-		 col[i][j][1] = 127;
-		 col[i][j][2] = 127;
+		 
+		 
+		 col_pos[i][j][0] = j;
+		 col_pos[i][j][1] = i;
+		 col_pos[i][j][2] = 0;
+		 col_pos[i][j][3] = 1.0;
+		 
+		 mat_col.mult(col_pos[i][j]);
+		 
+		 col_pos[i][j] /= col_pos[i][j][3];
+		 
+		 
+		 //   std::cerr << col_pos[1] << " " << col_pos[0] << std::endl;
 	       }
-	     }
-	     for (unsigned int i = 0; i < 480; ++i){
-	       for (unsigned int j = 0; j < 640; ++j){
-	       math::Vec4f col_pos;
+	     }	     
+	     
+	     
+	     for (int i = 0; i < capture_frame_num; ++i){
 	       
-	       col_pos[0] = j;
-	       col_pos[1] = i;
-	       col_pos[2] = 0;
-	       col_pos[3] = 1.0;
 	       
-	       mat_col.mult(col_pos);
-
-	       col_pos /= col_pos[3];
-
-
-	       //   std::cerr << col_pos[1] << " " << col_pos[0] << std::endl;
-
-
-	       if (col_pos[1] < 0 || col_pos[1] >= 480){
-		 continue;
+	       
+	       char outName[80];
+	       sprintf(outName, "out_%03d.ply", i);
+	       	       
+	       std::ofstream plyfile(outName);
+	       
+	       // write ply header
+	       plyfile << "ply" << std::endl;
+	       plyfile << "format ascii 1.0" << std::endl;
+	       plyfile << "element vertex " << (640*480) << std::endl;
+	       plyfile << "property float x" << std::endl;
+	       plyfile << "property float y" << std::endl;
+	       plyfile << "property float z" << std::endl;
+	       plyfile << "property uchar diffuse_red" << std::endl;
+	       plyfile << "property uchar diffuse_green" << std::endl;
+	       plyfile << "property uchar diffuse_blue" << std::endl;
+	       plyfile << "end_header" << std::endl;
+	       
+	       for (unsigned int i = 0; i < 480; ++i){
+		 for (unsigned int j = 0; j < 640; ++j){
+		   col[i][j][0] = 127;
+		   col[i][j][1] = 127;
+		   col[i][j][2] = 127;
+		 }
 	       }
-	       
-	       if (col_pos[0] < 0 || col_pos[0] >= 640){
-		 continue;
+
+	       for (unsigned int i = 0; i < 480; ++i){
+		 for (unsigned int j = 0; j < 640; ++j){
+
+		   math::Vec4f col_p = col_pos[i][j];
+		   if (col_p[1] < 0 || col_p[1] >= 480){
+		     continue;
+		   }
+		   
+		   if (col_p[0] < 0 || col_p[0] >= 640){
+		     continue;
+		   }
+		   col[(int) col_p[1]][(int) col_p[0]][0] = capture_color[(i*640+j)*3+0];
+		   col[(int) col_p[1]][(int) col_p[0]][1] = capture_color[(i*640+j)*3+1];
+		   col[(int) col_p[1]][(int) col_p[0]][2] = capture_color[(i*640+j)*3+2];
+		   
+		 }
 	       }
 
-	       col[(int) col_pos[1]][(int) col_pos[0]][0] = rgb[(i*640+j)*3+0];
-	       col[(int) col_pos[1]][(int) col_pos[0]][1] = rgb[(i*640+j)*3+1];
-	       col[(int) col_pos[1]][(int) col_pos[0]][2] = rgb[(i*640+j)*3+2];
+
 	       
+	       capture_color.erase(capture_color.begin(), capture_color.begin()+640*480*3);
+
+	       for (unsigned int i = 0; i < 480; ++i){
+		 for (unsigned int j = 0; j < 640; ++j){
+		   math::Vec4f pt;
+		 
+		   pt[0] = j;
+		   pt[1] = i;
+		   pt[2] = capture_depth[i*640+j];
+		   pt[3] = 1;
+
+		   //		      std::cerr << pt << std::endl;
+		   
+		   
+
+		   math::Vec4f ptout = mat.mult(pt);
+		   
+		   ptout /= ptout[3];
+		   
+		   //   std::cerr <<ptout << std::endl;
+		   
+		   
+		   plyfile << ptout[0] << " " << ptout[1] << " " << ptout[2] <<  
+		     " "<< (int) col[i][j][0] << " "<< (int) col[i][j][1] << " " << (int) col[i][j][2] << std::endl;
+		   
+		   //    plyfile << ptout[0] << " " << ptout[1] << " " << ptout[2] << " 255 255 255" << std::endl;
+		 }
 	       }
-	     }
-	     	     
-	     for (unsigned int i = 0; i < 480; ++i){
-	       for (unsigned int j = 0; j < 640; ++j){
-	       math::Vec4f pt;
-	       //	       std::cerr << r_depth[i*640+j]   << std::endl;
-	       pt[0] = j;
-	       pt[1] = i;
-	       pt[2] = r_depth[i*640+j];
-	       pt[3] = 1;
-
-	       //   std::cerr << pt << std::endl;
-
-
-
-	       math::Vec4f ptout = mat.mult(pt);
-	       
-	       ptout /= ptout[3];
-
-	       //   std::cerr <<ptout << std::endl;
-	       
-	       
-	       plyfile << ptout[0] << " " << ptout[1] << " " << ptout[2] <<  
-		 " "<< (int) col[i][j][0] << " "<< (int) col[i][j][1] << " " << (int) col[i][j][2] << std::endl;
-
-	       //    plyfile << ptout[0] << " " << ptout[1] << " " << ptout[2] << " 255 255 255" << std::endl;
+	       capture_depth.erase(capture_depth.begin(), capture_depth.begin()+FREENECT_FRAME_PIX);
 	       }
-	     }
 	}
 
 	got_frames = 0;
@@ -399,7 +445,11 @@ void keyPressed(unsigned char key, int x, int y)
 	device->setTiltDegrees(freenect_angle);
 
 	if (key == ' '){
-	  save = true;
+	  std::cerr << "Capturing: started to capture "  << capture_frame_num << "/" << capture_frame_jump<< " frames." << std::endl;
+
+	  capture_frame_cur = 0;
+	  count_frames = 0;
+
 	  
 	}
 
@@ -464,11 +514,33 @@ void *gl_threadfunc(void *arg)
 }
 
 int main(int argc, char **argv) {
+
+	capture_frame_jump = 1;
+	capture_frame_num = 1;
+
+	if (argc > 1){
+	  capture_frame_num = atoi(argv[1]);
+	}
+
+	if (argc > 2){
+	  capture_frame_jump = atoi(argv[2]);
+	}
+
+	capture_frame_cur = capture_frame_num;
+  std::cerr << "Capturing: started to capture "  << capture_frame_num << "/" << capture_frame_jump<< " frames." << std::endl;
+	
+
 	device = &freenect.createDevice(0);
 	device->startVideo();
 	device->startDepth();
 	gl_threadfunc(NULL);
 	device->stopVideo();
 	device->stopDepth();
+
+
+	/*	capture_depth.resize(FREENECT_FRAME_PIX*capture_frame_num);
+	capture_color.resize(640*480*4*capture_frame_num);
+	*/
+	
 	return 0;
 }
